@@ -12,6 +12,7 @@
   "license": "ISC",
   "dependencies": {
     "@ethersproject/shims": "^5.7.0",
+    "alchemy-sdk": "^2.2.3",
     "body-parser": "^1.20.1",
     "crypto-js": "^4.1.1",
     "dotenv": "^16.0.3",

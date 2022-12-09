@@ -1,6 +1,5 @@
 const crypto = require("crypto");
 const jwt = require("jsonwebtoken");
-const Web3 = require("web3");
 const ethers = require("ethers");
 const util = require("ethereumjs-util");
 const shim = require("@ethersproject/shims");
@@ -10,12 +9,15 @@ const transactionABI = require("./abis/transaction.json");
 
 dotenv.config();
 
-const rpc = "https://goerli.infura.io/v3/" + process.env.infuraApiKey;
+const mainnet_rpc = "https://mainnet.infura.io/v3/" + process.env.infuraApiKey;
+const goerli_rpc = "https://goerli.infura.io/v3/" + process.env.infuraApiKey;
 
-const provider = new ethers.providers.JsonRpcProvider(rpc);
-const wallet = new ethers.Wallet(process.env.ownerKey, provider);
-const signer = wallet.provider.getSigner(wallet.address);
-const web3 = new Web3(new Web3.providers.HttpProvider(rpc));
+const mainnet_provider = new ethers.providers.JsonRpcProvider(mainnet_rpc);
+const goerli_provider = new ethers.providers.JsonRpcProvider(goerli_rpc);
+const mainnet_wallet = new ethers.Wallet(process.env.ownerKey, mainnet_provider);
+const goerli_wallet = new ethers.Wallet(process.env.ownerKey, goerli_provider);
+const mainnet_signer = mainnet_wallet.provider.getSigner(mainnet_wallet.address);
+const goerli_signer = goerli_wallet.provider.getSigner(goerli_wallet.address);
 
 exports.generateAccessToken = function (token, data) {
   return jwt.sign(JSON.parse(data), token, { expiresIn: "10h" });
@@ -33,12 +35,16 @@ exports.authenticateToken = async function (token, payload) {
   }
 };
 
-exports.isTransactionSuccess = async function (tx_hash) {
+exports.isValidAddress = function(address) {
+  return ethers.utils.isAddress(address);
+}
+
+exports.isTransactionSuccessFromMain = async function (tx_hash) {
   setTimeout(() => {
     return false;
   }, process.env.MaxDelayTime);
   try {
-    let txn_data = await provider.getTransaction(tx_hash);
+    let txn_data = await mainnet_provider.getTransaction(tx_hash);
     if (txn_data) {
       if (txn_data.blockNumber) {
         return txn_data.from;
@@ -47,7 +53,37 @@ exports.isTransactionSuccess = async function (tx_hash) {
           new Promise((resolve) => setTimeout(resolve, delay));
         while (1) {
           await waitFor(process.env.delayTime);
-          let txn_data_again = await provider.getTransaction(tx_hash);
+          let txn_data_again = await mainnet_provider.getTransaction(tx_hash);
+          if (txn_data_again && txn_data_again.blockNumber) {
+            return txn_data_again.from;
+          } else {
+            continue;
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.log("isTransactionSuccessFromMain err", err);
+    return false;
+  }
+  return false;
+};
+
+exports.isTransactionSuccessFromGoerli = async function (tx_hash) {
+  setTimeout(() => {
+    return false;
+  }, process.env.MaxDelayTime);
+  try {
+    let txn_data = await goerli_provider.getTransaction(tx_hash);
+    if (txn_data) {
+      if (txn_data.blockNumber) {
+        return txn_data.from;
+      } else {
+        const waitFor = (delay) =>
+          new Promise((resolve) => setTimeout(resolve, delay));
+        while (1) {
+          await waitFor(process.env.delayTime);
+          let txn_data_again = await goerli_provider.getTransaction(tx_hash);
           if (txn_data_again && txn_data_again.blockNumber) {
             return txn_data_again.from;
           } else {
@@ -63,12 +99,32 @@ exports.isTransactionSuccess = async function (tx_hash) {
   return false;
 };
 
-exports.getPublicKeyFromContract = async function (address) {
+exports.getPublicKeyFromContractFromGoerli = async function (address) {
   try {
     const setupContract = new ethers.Contract(
       process.env.setupContractAddress,
       setupABI,
-      signer
+      goerli_signer
+    );
+    const public_key = await setupContract.getPubKey(address);
+    if (public_key && public_key[0]) {
+      return util.toAscii(public_key[0]);
+    } else {
+      console.log("get pubkey err => no data for that address");
+      return false;
+    }
+  } catch (e) {
+    console.log("get pubkey error", e);
+    return false;
+  }
+};
+
+exports.getPublicKeyFromContractFromMain = async function (address) {
+  try {
+    const setupContract = new ethers.Contract(
+      process.env.setupContractAddress,
+      setupABI,
+      mainnet_signer
     );
     const public_key = await setupContract.getPubKey(address);
     if (public_key && public_key[0]) {
@@ -100,22 +156,41 @@ exports.getCodeChallenge = function (verifier) {
   return challenge;
 };
 
-exports.signTransaction = async function (numTransaction) {
+exports.signTransactionFromGoerli = async function (numTransaction) {
   try {
     const transactionContract = new ethers.Contract(
       process.env.transactionContractAddress,
       transactionABI,
-      signer
+      goerli_signer
     );
-    // const transactionContract = new web3.eth.Contract(
-    //     transactionABI,
-    //     process.env.transactionContractAddress,
-    //     signer
-    //   );
     let nTX = await transactionContract.populateTransaction.setRelayerSign(
       numTransaction
     );
-    let txn = await wallet.sendTransaction(nTX);
+    let txn = await goerli_wallet.sendTransaction(nTX);
+    let resTxn = await txn.wait();
+    if (resTxn.blockNumber) {
+      return true;
+    } else {
+      return false;
+    }
+  } catch (e) {
+    console.log("get pubkey error", e);
+    return false;
+  }
+  return false;
+};
+
+exports.signTransactionFromMain = async function (numTransaction) {
+  try {
+    const transactionContract = new ethers.Contract(
+      process.env.transactionContractAddress,
+      transactionABI,
+      mainnet_signer
+    );
+    let nTX = await transactionContract.populateTransaction.setRelayerSign(
+      numTransaction
+    );
+    let txn = await mainnet_wallet.sendTransaction(nTX);
     let resTxn = await txn.wait();
     if (resTxn.blockNumber) {
       return true;
